@@ -12,7 +12,6 @@ import seaborn as sns
 
 from torchmetrics.detection.mean_ap import MeanAveragePrecision
 
-
 # ----------- CONFIG ------------
 IMAGE_DIR = "images"
 ANNOTATION_DIR = "annotations"
@@ -109,25 +108,55 @@ def collate_fn(batch):
 
 
 
-def evaluate(model, dataloader):
+
+def evaluate(model, dataloader, device, class_labels, score_threshold=0.5):
     model.eval()
     metric = MeanAveragePrecision(iou_type="bbox")
-    
+
+    all_preds_labels = []
+    all_true_labels = []
+
     with torch.no_grad():
         for images, targets in dataloader:
-            images = [img.to(DEVICE) for img in images]
+            images = [img.to(device) for img in images]
             outputs = model(images)
 
-            # Move to CPU for torchmetrics
-            outputs = [{k: v.cpu() for k, v in o.items()} for o in outputs]
-            targets = [{k: v.cpu() for k, v in t.items()} for t in targets]
+            # Move outputs and targets to CPU for metrics
+            outputs_cpu = [{k: v.cpu() for k, v in o.items()} for o in outputs]
+            targets_cpu = [{k: v.cpu() for k, v in t.items()} for t in targets]
 
-            metric.update(outputs, targets)
+            # Update mAP metric
+            metric.update(outputs_cpu, targets_cpu)
 
+            # Prepare data for confusion matrix (label only)
+            for pred, tgt in zip(outputs_cpu, targets_cpu):
+                scores = pred['scores']
+                pred_labels = pred['labels'][scores > score_threshold].numpy()
+                true_labels = tgt['labels'].numpy()
+
+                # Add only if lengths match or just extend (you may customize matching here)
+                # Here we simply append all true labels and predicted labels at this threshold
+                all_preds_labels.extend(pred_labels.tolist())
+                all_true_labels.extend(true_labels.tolist())
+
+    # Compute mAP
     results = metric.compute()
     print("\n--- Mean Average Precision (mAP) Results ---")
     for k, v in results.items():
         print(f"{k}: {v:.4f}")
+
+    # Confusion matrix and classification report for predicted labels
+    print("\n--- Classification Report (labels only, thresholded) ---")
+    print(classification_report(all_true_labels, all_preds_labels, target_names=class_labels))
+
+    cm = confusion_matrix(all_true_labels, all_preds_labels)
+    plt.figure(figsize=(10,8))
+    sns.heatmap(cm, annot=True, fmt='d', xticklabels=class_labels, yticklabels=class_labels, cmap="Blues")
+    plt.title("Confusion Matrix (Predicted vs True labels)")
+    plt.xlabel("Predicted Labels")
+    plt.ylabel("True Labels")
+    plt.show()
+
 
 # --------------------------------
 
