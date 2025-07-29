@@ -10,6 +10,9 @@ from sklearn.metrics import confusion_matrix, classification_report
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+from torchmetrics.detection.mean_ap import MeanAveragePrecision
+
+
 # ----------- CONFIG ------------
 IMAGE_DIR = "images"
 ANNOTATION_DIR = "annotations"
@@ -105,30 +108,27 @@ def collate_fn(batch):
     return tuple(zip(*batch))
 
 
+
 def evaluate(model, dataloader):
     model.eval()
-    all_preds = []
-    all_targets = []
-
+    metric = MeanAveragePrecision(iou_type="bbox")
+    
     with torch.no_grad():
         for images, targets in dataloader:
             images = [img.to(DEVICE) for img in images]
             outputs = model(images)
 
-            for pred, tgt in zip(outputs, targets):
-                pred_labels = pred['labels'].cpu().numpy()
-                true_labels = tgt['labels'].cpu().numpy()
-                all_preds.extend(pred_labels)
-                all_targets.extend(true_labels)
+            # Move to CPU for torchmetrics
+            outputs = [{k: v.cpu() for k, v in o.items()} for o in outputs]
+            targets = [{k: v.cpu() for k, v in t.items()} for t in targets]
 
-    print(classification_report(all_targets, all_preds, target_names=CLASS_LABELS))
-    cm = confusion_matrix(all_targets, all_preds)
-    plt.figure(figsize=(8, 6))
-    sns.heatmap(cm, annot=True, fmt='d', xticklabels=CLASS_LABELS, yticklabels=CLASS_LABELS)
-    plt.title("Confusion Matrix")
-    plt.xlabel("Predicted")
-    plt.ylabel("True")
-    plt.show()
+            metric.update(outputs, targets)
+
+    results = metric.compute()
+    print("\n--- Mean Average Precision (mAP) Results ---")
+    for k, v in results.items():
+        print(f"{k}: {v:.4f}")
+
 # --------------------------------
 
 
