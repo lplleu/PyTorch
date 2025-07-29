@@ -109,53 +109,46 @@ def collate_fn(batch):
 
 
 
-def evaluate(model, dataloader, device, class_labels, score_threshold=0.5):
-    model.eval()
-    metric = MeanAveragePrecision(iou_type="bbox")
+def evaluate(model, data_loader, device, class_labels, num_classes, iou_threshold=0.5, score_threshold=0.5):
+    import matplotlib.pyplot as plt
+    from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+    from torchvision.ops import box_iou
 
-    all_preds_labels = []
-    all_true_labels = []
+    model.eval()
+    all_true_boxes, all_true_labels = [], []
+    all_pred_boxes, all_pred_labels, all_pred_scores = [], [], []
 
     with torch.no_grad():
-        for images, targets in dataloader:
-            images = [img.to(device) for img in images]
+        for i, (images, targets) in enumerate(data_loader):
+            images = [image.to(device) for image in images]
+            targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+
             outputs = model(images)
 
-            # Move outputs and targets to CPU for metrics
-            outputs_cpu = [{k: v.cpu() for k, v in o.items()} for o in outputs]
-            targets_cpu = [{k: v.cpu() for k, v in t.items()} for t in targets]
+            for target, output in zip(targets, outputs):
+                all_true_boxes.append(target['boxes'])
+                all_true_labels.append(target['labels'])
+                all_pred_boxes.append(output['boxes'].detach())
+                all_pred_labels.append(output['labels'].detach())
+                all_pred_scores.append(output['scores'].detach())
 
-            # Update mAP metric
-            metric.update(outputs_cpu, targets_cpu)
+            if i % 10 == 0:
+                print(f"  Evaluation Iteration {i}/{len(data_loader)}")
 
-            # Prepare data for confusion matrix (label only)
-            for pred, tgt in zip(outputs_cpu, targets_cpu):
-                scores = pred['scores']
-                pred_labels = pred['labels'][scores > score_threshold].numpy()
-                true_labels = tgt['labels'].numpy()
+    precision, recall, f1, cm = compute_metrics_with_confusion_matrix(
+        all_true_boxes, all_true_labels, all_pred_boxes, all_pred_labels, all_pred_scores,
+        num_classes, iou_threshold, score_threshold
+    )
 
-                # Add only if lengths match or just extend (you may customize matching here)
-                # Here we simply append all true labels and predicted labels at this threshold
-                all_preds_labels.extend(pred_labels.tolist())
-                all_true_labels.extend(true_labels.tolist())
+    print(f"Validation - Precision: {precision:.4f}, Recall: {recall:.4f}, F1-Score: {f1:.4f}")
 
-    # Compute mAP
-    results = metric.compute()
-    print("\n--- Mean Average Precision (mAP) Results ---")
-    for k, v in results.items():
-        print(f"{k}: {v:.4f}")
-
-    # Confusion matrix and classification report for predicted labels
-    print("\n--- Classification Report (labels only, thresholded) ---")
-    print(classification_report(all_true_labels, all_preds_labels, target_names=class_labels))
-
-    cm = confusion_matrix(all_true_labels, all_preds_labels)
-    plt.figure(figsize=(10,8))
-    sns.heatmap(cm, annot=True, fmt='d', xticklabels=class_labels, yticklabels=class_labels, cmap="Blues")
-    plt.title("Confusion Matrix (Predicted vs True labels)")
-    plt.xlabel("Predicted Labels")
-    plt.ylabel("True Labels")
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=class_labels + ["No Detection"])
+    disp.plot(cmap=plt.cm.Blues, xticks_rotation='vertical')
+    plt.title("Confusion Matrix")
     plt.show()
+
+    return precision, recall, f1, cm
+
 
 
 # --------------------------------
@@ -177,24 +170,34 @@ def train():
     params = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.SGD(params, lr=0.005, momentum=0.9, weight_decay=0.0005)
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.1)
-
-    for epoch in range(NUM_EPOCHS):
+    for epoch in range(num_epochs):
         model.train()
-        epoch_loss = 0.0
+        running_loss = 0.0
+    
         for images, targets in train_loader:
-            images = [img.to(DEVICE) for img in images]
-            targets = [{k: v.to(DEVICE) for k, v in t.items()} for t in targets]
-
-            loss_dict = model(images, targets)
-            losses = sum(loss for loss in loss_dict.values())
+            images = [img.to(device) for img in images]
+            targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+    
             optimizer.zero_grad()
-            losses.backward()
+            outputs = model(images, targets)
+            loss = sum(loss for loss in outputs.values())
+            loss.backward()
             optimizer.step()
-
-            epoch_loss += losses.item()
-
-        lr_scheduler.step()
-        print(f"Epoch [{epoch+1}/{NUM_EPOCHS}], Loss: {epoch_loss:.4f}")
+    
+            running_loss += loss.item()
+    
+        print(f"Epoch {epoch+1}/{num_epochs}, Training Loss: {running_loss / len(train_loader):.4f}")
+    
+        print("--- evaluation on validation set ---")
+        precision, recall, f1, cm = evaluate(
+            model,
+            val_loader,
+            device=device,
+            class_labels=CLASS_LABELS,
+            num_classes=NUM_CLASSES,
+            iou_threshold=0.5,
+            score_threshold=0.5
+        )
 
     print("\n--- Evaluation on Validation Set ---")
     evaluate(model, val_loader)
