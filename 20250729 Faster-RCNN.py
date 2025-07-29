@@ -33,31 +33,42 @@ class CustomDataset(Dataset):
         return len(self.image_files)
 
     def __getitem__(self, idx):
-        img_file = self.image_files[idx]
-        img_path = os.path.join(self.image_dir, img_file)
-        ann_path = os.path.join(self.annotation_dir, os.path.splitext(img_file)[0] + ".xml")
-        
-        img = Image.open(img_path).convert("RGB")
-        boxes, labels = self.parse_voc_xml(ann_path)
+        try:
+            img_file = self.image_files[idx]
+            img_path = os.path.join(self.image_dir, img_file)
+            ann_path = os.path.join(self.annotation_dir, os.path.splitext(img_file)[0] + ".xml")
 
-        boxes = torch.as_tensor(boxes, dtype=torch.float32)
-        labels = torch.as_tensor(labels, dtype=torch.int64)
-        image_id = torch.tensor([idx])
-        area = (boxes[:, 3] - boxes[:, 1]) * (boxes[:, 2] - boxes[:, 0])
-        iscrowd = torch.zeros((len(labels),), dtype=torch.int64)
+            # Load image
+            img = Image.open(img_path).convert("RGB")
 
-        target = {
-            "boxes": boxes,
-            "labels": labels,
-            "image_id": image_id,
-            "area": area,
-            "iscrowd": iscrowd
-        }
+            # Parse annotation
+            boxes, labels = self.parse_voc_xml(ann_path)
 
-        if self.transforms:
-            img = self.transforms(img)
+            boxes = torch.as_tensor(boxes, dtype=torch.float32)
+            labels = torch.as_tensor(labels, dtype=torch.int64)
+            image_id = torch.tensor([idx])
+            area = (boxes[:, 3] - boxes[:, 1]) * (boxes[:, 2] - boxes[:, 0])
+            iscrowd = torch.zeros((len(labels),), dtype=torch.int64)
 
-        return img, target
+            target = {
+                "boxes": boxes,
+                "labels": labels,
+                "image_id": image_id,
+                "area": area,
+                "iscrowd": iscrowd
+            }
+
+            if self.transforms:
+                img = self.transforms(img)
+
+            return img, target
+
+        except Exception as e:
+            print(f"[Skipping] Error loading {img_file}: {e}")
+            # Pick another index to ensure batch stays consistent
+            new_idx = (idx + 1) % len(self)
+            return self.__getitem__(new_idx)
+
 
     def parse_voc_xml(self, path):
         tree = ET.parse(path)
