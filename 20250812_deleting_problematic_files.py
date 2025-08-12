@@ -1,52 +1,41 @@
 import os
+import xml.etree.ElementTree as ET
 
-# Folders with images and annotations
 annots_dir = 'annots'
 imgs_dir = 'imgs'
 
 def is_valid_bbox(xmin, ymin, xmax, ymax):
-    return (xmax > xmin) and (ymax > ymin)
+    return xmax > xmin and ymax > ymin
 
-def parse_annotation(file_path):
-    """
-    Example for VOC format (xmin, ymin, xmax, ymax) per line or
-    YOLO format (class, x_center, y_center, width, height)
-    Adjust parsing logic if needed.
-    """
-    boxes = []
-    with open(file_path, 'r') as f:
-        lines = f.readlines()
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        parts = line.split()
-        if len(parts) == 5:
-            # Assuming YOLO format: class x_center y_center width height (all normalized 0-1)
-            cls, xc, yc, w, h = parts
-            xc, yc, w, h = map(float, (xc, yc, w, h))
-            if w <= 0 or h <= 0:
-                return False
-        elif len(parts) == 4:
-            # Assuming VOC format: xmin ymin xmax ymax
-            xmin, ymin, xmax, ymax = map(float, parts)
+def annotation_has_invalid_bbox(xml_path):
+    try:
+        tree = ET.parse(xml_path)
+        root = tree.getroot()
+        for obj in root.findall('object'):
+            bbox = obj.find('bndbox')
+            xmin = float(bbox.find('xmin').text)
+            ymin = float(bbox.find('ymin').text)
+            xmax = float(bbox.find('xmax').text)
+            ymax = float(bbox.find('ymax').text)
             if not is_valid_bbox(xmin, ymin, xmax, ymax):
-                return False
-        else:
-            # Unknown format - skip or treat as invalid
-            return False
-    return True
+                print(f"Invalid bbox in {xml_path}: xmin={xmin}, ymin={ymin}, xmax={xmax}, ymax={ymax}")
+                return True
+    except Exception as e:
+        print(f"Error parsing {xml_path}: {e}")
+        return True  # treat parse error as invalid
+    return False
 
-def cleanup_invalid_boxes(annots_dir, imgs_dir):
+def delete_invalid_annotations(annots_dir, imgs_dir):
     annots_files = os.listdir(annots_dir)
-    removed_files = []
+    removed_count = 0
     for annot_file in annots_files:
+        if not annot_file.endswith('.xml'):
+            continue
         annot_path = os.path.join(annots_dir, annot_file)
-        if not parse_annotation(annot_path):
-            # Delete annotation file
+        if annotation_has_invalid_bbox(annot_path):
+            # Delete annotation
             os.remove(annot_path)
-            # Delete corresponding image
-            # Assumes image file has the same base name with common extensions
+            # Delete corresponding image (same base name with common extensions)
             base_name = os.path.splitext(annot_file)[0]
             deleted_image = False
             for ext in ['.jpg', '.jpeg', '.png', '.bmp']:
@@ -55,8 +44,8 @@ def cleanup_invalid_boxes(annots_dir, imgs_dir):
                     os.remove(img_path)
                     deleted_image = True
                     break
-            removed_files.append((annot_file, deleted_image))
-            print(f"Removed annotation {annot_file} and image: {deleted_image}")
-    print(f"Total removed: {len(removed_files)}")
+            print(f"Deleted annotation {annot_file} and image: {deleted_image}")
+            removed_count += 1
+    print(f"Total invalid annotations removed: {removed_count}")
 
-cleanup_invalid_boxes(annots_dir, imgs_dir)
+delete_invalid_annotations(annots_dir, imgs_dir)
