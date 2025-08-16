@@ -92,7 +92,20 @@ def visualize_detection_result(image_path, annotation_path, model_path, output_p
     # Plot
     fig, ax = plt.subplots(1, figsize=(12, 8))
     ax.imshow(orig_image)
+                                   
+    for match_type, box, label, score in matches:
+        if match_type != "TP":
+            continue  # skip FP and FN
+        color = "green"
+        x1, y1, x2, y2 = box
+        width, height = x2 - x1, y2 - y1
+        rect = patches.Rectangle((x1, y1), width, height, linewidth=2, edgecolor=color, facecolor='none')
+        ax.add_patch(rect)
+    
+        label_text = f"{CLASS_LABELS[label]} (TP) {score:.2f}"
+        ax.text(x1, y1 - 5, label_text, color=color, fontsize=10, backgroundcolor="white")
 
+    '''
     for match_type, box, label, score in matches:
         color = {"TP": "green", "FP": "red", "FN": "orange"}[match_type]
         x1, y1, x2, y2 = box
@@ -104,6 +117,7 @@ def visualize_detection_result(image_path, annotation_path, model_path, output_p
         if score is not None:
             label_text += f" {score:.2f}"
         ax.text(x1, y1 - 5, label_text, color=color, fontsize=10, backgroundcolor="white")
+    '''
 
     plt.title("Detection Result with TP / FP / FN")
     plt.axis("off")
